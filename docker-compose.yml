@@ -1,0 +1,15 @@
+# Etiqueta: APP_CHANGO_COMPOSE_02102026
+# Proyecto: app chango
+# Arquitectura: Docker Compose Local Runtime Orchestrator
+
+services:
+  chango-backend:
+    build: .
+    container_name: chango_runtime_node
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
