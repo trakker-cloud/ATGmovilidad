@@ -1,67 +1,51 @@
-#!/usr/bin/env python3
-# Etiqueta: APP_CHANGO_EVENT_BUS_02102026
-# Proyecto: app chango
-# Arquitectura: Event-Driven Architecture / Apache Kafka Producer-Consumer
-
 import json
-import os
-from kafka import KafkaProducer, KafkaConsumer
-from kafka.errors import KafkaError
+import logging
+from kafka import KafkaProducer
+from kafka.errors import NoBrokersAvailable
 
-class AppChangoEventBus:
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("EventBus-Kernel")
+
+class EventBus:
     """
-    Espina dorsal de eventos basada en Apache Kafka.
-    Garantiza que los cambios de estado (Viajes, Ubicación, Pagos) 
-    sean distribuidos de forma asíncrona y tolerante a fallos.
+    Motor de eventos central del microkernel (EDA).
+    Implementa patrón Singleton para unificar el canal de publicación.
     """
-    def __init__(self, bootstrap_servers: str = "localhost:9092"):
-        self.bootstrap_servers = os.getenv("KAFKA_SERVERS", bootstrap_servers)
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(EventBus, cls).__new__(cls)
+            cls._instance._initialize_bus()
+        return cls._instance
+
+    def _initialize_bus(self):
+        self.bootstrap_servers = ['localhost:9092']
         self.producer = None
-        self._init_producer()
-
-    def _init_producer(self):
+        logger.info("[EVENT BUS] Inicializando puente asíncrono de eventos...")
+        
         try:
+            # Configurado con timeout bajo (2000ms) para no bloquear el runtime si Kafka está caído
             self.producer = KafkaProducer(
-                bootstrap_servers=[self.bootstrap_servers],
+                bootstrap_servers=self.bootstrap_servers,
                 value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-                key_serializer=lambda k: k.encode('utf-8') if k else None,
-                retries=3
+                api_version_auto_timeout_ms=2000,
+                request_timeout_ms=2000
             )
-            print("[EVENT BUS] Productor de Kafka conectado exitosamente.")
-        except Exception as e:
-            print(f"[EVENT WARNING] No se pudo conectar a Kafka ({e}). Operando en modo simulación/fallback.")
-            self.producer = None
+            logger.info("[EVENT BUS] Conectado a Apache Kafka (Broker Operativo).")
+        except NoBrokersAvailable:
+            logger.warning("[EVENT BUS] Advertencia: Broker Kafka no detectado en localhost:9092.")
+            logger.warning("[EVENT BUS] El microkernel operará en modo degradado (Fallback: RAM/Console).")
 
-    def publish_event(self, topic: str, event_key: str, event_payload: dict):
-        """
-        Publica un evento transaccional o de telemetría a un tópico específico de Kafka.
-        """
+    def publish(self, event_name: str, payload: dict):
+        """Publica un evento en el bus distribuido."""
         if self.producer:
             try:
-                future = self.producer.send(topic, key=event_key, value=event_payload)
-                self.producer.flush(timeout=2.0)
-                print(f"[KAFKA PUBLISH] Tópico: '{topic}' | Key: '{event_key}'")
-                return True
-            except KafkaError as ke:
-                print(f"[ERROR KAFKA] Fallo al enviar evento al tópico {topic}: {ke}")
-                return False
+                self.producer.send(event_name, payload)
+                self.producer.flush()
+                logger.info(f"[EVENT BUS] Topico '{event_name}' -> Emitido con éxito.")
+            except Exception as e:
+                logger.error(f"[EVENT BUS] Fallo al emitir evento: {str(e)}")
         else:
-            print(f"[SIMULACIÓN EVENTO] Tópico: '{topic}' | Payload: {event_payload}")
-            return True
-
-if __name__ == "__main__":
-    print("--- [APP CHANGO] Verificando Capa de Eventos (Kafka) ---")
-    bus = AppChangoEventBus()
-    
-    # Simulación de un evento de viaje solicitado
-    sample_event = {
-        "event_type": "RideRequested",
-        "tenant_id": "app_chango",
-        "trip_id": "TRIP-TUC-2026-001",
-        "passenger_id": "USER-20-23056760",
-        "origin": {"lat": -26.8083, "lng": -65.2176},
-        "destination": {"lat": -26.8321, "lng": -65.2070}
-    }
-    
-    bus.publish_event("chango.trip.events", "TRIP-TUC-2026-001", sample_event)
-    print("\n[OK] Conector de Event Bus validado.")
+            # Ruta de contingencia para evitar pánico del kernel
+            logger.info(f"[EVENT BUS FALLBACK] {event_name} | Datos: {payload}")
